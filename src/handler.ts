@@ -1,28 +1,11 @@
 import fs, { stat } from 'fs';
 
+import { RunReport } from './lib/types';
+
 const scan_paths = [
     '/Users/fuschini/OneDrive - KIS Solutions/PS/Notes',
     '/Users/fuschini/OneDrive - KIS Solutions/Coaching',
 ]
-
-interface RunReport {
-    file_path: string,
-    files: File[]
-}
-
-interface File {
-    name: string,
-    last_modified: Date,
-    todos: Todo[]
-}
-
-interface Todo {
-    original_text: string,
-    desc: string,
-    due_date: string,
-    track_status: Boolean
-    error_msg: string
-}
 
 export const handler = () => { 
     console.log('Hello World from handler');
@@ -47,7 +30,6 @@ export const handler = () => {
             files: files
         }
     })
-
 
     console.log(JSON.stringify(obj, null, 2));
     console.log(`Last run: ${lastRunTimestamp}`);
