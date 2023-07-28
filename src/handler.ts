@@ -3,6 +3,7 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 
 import { RunReport, Todo } from './lib/types';
+import { format } from 'date-fns';
 const { Client } = require("@notionhq/client");
 
 const scan_paths = [
@@ -25,9 +26,8 @@ export const handler = async () => {
                 last_modified: stats.mtime,
                 todos: []
             }
-        // TODO revert this
-        // }).filter(file => file.name.endsWith('.docx') && file.last_modified > new Date(lastRunTimestamp));
-        }).filter(file => file.name.endsWith('ummy notes.docx'));
+        }).filter(file => file.name.endsWith('.docx') && file.last_modified > new Date(lastRunTimestamp));
+        // }).filter(file => file.name.endsWith('ummy notes.docx'));
 
         return {
             file_path: path,
@@ -35,7 +35,6 @@ export const handler = async () => {
         }
     })
 
-    console.log(JSON.stringify(obj, null, 2));
     console.log(`Last run: ${lastRunTimestamp}`);
 
     for (const path of obj) {
@@ -51,8 +50,8 @@ export const handler = async () => {
             // extract untracked TODOs that match pattern "TODO <task_name> by <yyyy-MM-dd> (tracked)?" from comments.xml
             let todos = extractUntrackedTodos(commentsContent);
             file.todos = todos;
-            console.log(todos);
 
+            // Only for untracked todos that could be parsed
             if (todos?.filter(todo => todo.error_msg !== 'Could not parse TODO').length > 0) {
                 // create todos on notion
                 await createTodosOnNotion(todos?.filter(todo => todo.error_msg !== 'Could not parse TODO'), file.name, path.file_path);
@@ -66,15 +65,21 @@ export const handler = async () => {
                     }
                 }
                 
+                // update ./tmp/word/comments.xml with tracked TODOs
+                fs.writeFileSync('./.tmp/word/comments.xml', commentsContent);
+    
+                // zip ./tmp back into original file
+                execSync(`cd ./.tmp && zip -r "${path.file_path}/${file.name}" * && cd ..`);
             } else {
                 console.log("No TODOs to process");
             }
 
-
             fs.writeFileSync('./output.xml', commentsContent);
         }
     }
-
+    
+    fs.appendFileSync(`./.logs/${format(runStartTimestamp, 'yyyy-MM-dd')}.txt`, `${runStartTimestamp.toISOString()} \n ${JSON.stringify(obj, null, 2)}\n\n`);
+    fs.writeFileSync('lastRunTimestamp.txt', runStartTimestamp.toISOString());
 }
 
 function extractUntrackedTodos(commentsContent: string): Todo[] {
