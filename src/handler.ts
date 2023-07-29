@@ -4,19 +4,17 @@ import { execSync } from 'child_process';
 
 import { RunReport, Todo } from './lib/types';
 import { format } from 'date-fns';
+import { log } from 'console';
 const { Client } = require("@notionhq/client");
 
-const scan_paths = [
-    '/Users/fuschini/OneDrive - KIS Solutions/PS/Notes',
-    '/Users/fuschini/OneDrive - KIS Solutions/Coaching',
-]
+export function getLastRunTimestamp() {
+    return fs.readFileSync('lastRunTimestamp.txt', 'utf8');
+}
 
-export const handler = async () => { 
-    const runStartTimestamp = new Date();
-    const lastRunTimestamp = fs.readFileSync('lastRunTimestamp.txt', 'utf8');
-    
-    // Get all files in the scan_paths that have been modified since last run and end with .docx
-    let obj: RunReport[] = scan_paths.map(path => {
+export function getFilesToBeScanned(scan_paths: string[]): RunReport[] {
+    const lastRunTimestamp = getLastRunTimestamp();
+
+    return scan_paths.map(path => {
 
         const files = fs.readdirSync(path).map(file => {
             const stats = fs.statSync(`${path}/${file}`);
@@ -26,7 +24,7 @@ export const handler = async () => {
                 last_modified: stats.mtime,
                 todos: []
             }
-        }).filter(file => file.name.endsWith('.docx') && file.last_modified > new Date(lastRunTimestamp));
+        }).filter(file => file.name.match(/^[^~].+\.docx$/) && file.last_modified > new Date(lastRunTimestamp));
         // }).filter(file => file.name.endsWith('ummy notes.docx'));
 
         return {
@@ -34,15 +32,24 @@ export const handler = async () => {
             files: files
         }
     })
+}
 
-    console.log(`Last run: ${lastRunTimestamp}`);
+export function extractDocContents(file_path: string, file_name: string) {
+    // unzip file into ./tmp
+    execSync('rm -rf ./.tmp');
+    execSync(`unzip "${file_path}/${file_name}" -d ./.tmp`);
+}
+
+export const handler = async (scan_paths: string[]) => {
+    const runStartTimestamp = new Date();
+
+    // Get all files in the scan_paths that have been modified since last run and end with .docx
+    let obj = getFilesToBeScanned(scan_paths);
 
     for (const path of obj) {
         for (const file of path.files) {
-            
-            // unzip file into ./tmp
-            execSync('rm -rf ./.tmp');
-            execSync(`unzip "${path.file_path}/${file.name}" -d ./.tmp`);
+
+            extractDocContents(path.file_path, file.name);
 
             // read ./tmp/word/comments.xml
             let commentsContent = fs.readFileSync('./.tmp/word/comments.xml', 'utf8');
@@ -55,19 +62,19 @@ export const handler = async () => {
             if (todos?.filter(todo => todo.error_msg !== 'Could not parse TODO').length > 0) {
                 // create todos on notion
                 await createTodosOnNotion(todos?.filter(todo => todo.error_msg !== 'Could not parse TODO'), file.name, path.file_path);
-    
+
                 console.log("todos post notion processing: ", todos);
-    
+
                 // update comments.xml with tracked TODOs
                 for (const todo of todos) {
                     if (todo.track_status) {
                         commentsContent = commentsContent.replace(todo.original_text, todo.original_text + ' (tracked)');
                     }
                 }
-                
+
                 // update ./tmp/word/comments.xml with tracked TODOs
                 fs.writeFileSync('./.tmp/word/comments.xml', commentsContent);
-    
+
                 // zip ./tmp back into original file
                 execSync(`cd ./.tmp && zip -r "${path.file_path}/${file.name}" * && cd ..`);
             } else {
@@ -77,26 +84,28 @@ export const handler = async () => {
             fs.writeFileSync('./output.xml', commentsContent);
         }
     }
-    
+
     fs.appendFileSync(`./.logs/${format(runStartTimestamp, 'yyyy-MM-dd')}.txt`, `${runStartTimestamp.toISOString()} \n ${JSON.stringify(obj, null, 2)}\n\n`);
     fs.writeFileSync('lastRunTimestamp.txt', runStartTimestamp.toISOString());
 }
 
-function extractUntrackedTodos(commentsContent: string): Todo[] {
-    const myCommentsRegex = /w:author="Henrique Fuschini.+?TODO[^<]*/g
+export function extractUntrackedTodos(commentsContent: string): Todo[] {
+    const myCommentsRegex = /w:author="Henrique Fuschini.+?<\/w:comment>/g
     const todoTextRegex = /TODO[^<]*/g
     const todoRegex2 = /TODO ([\w ]*) by ([0-9]{4}-[0-9]{2}-[0-9]{2})( \(tracked\))?/
 
     let todosTextList = commentsContent.match(myCommentsRegex)
+    console.log("todosTextList: ", todosTextList);
 
-    const parsedTodos = todosTextList?.map(commentText => { 
+
+    const parsedTodos = todosTextList?.filter(todoText => todoText.match('<w:t>TODO')).map(commentText => {
         const todoText = commentText.match(todoTextRegex);
 
         if (!todoText || todoText.length === 0) {
             console.log(`ERROR: Could not parse TODO: ${commentText}`);
             console.log(`todotext: ${todoText}`);
             console.log(`todotext calculated: ${todoTextRegex.exec(commentText)}`);
-            
+
             return {
                 original_text: commentText,
                 desc: '',
@@ -107,7 +116,7 @@ function extractUntrackedTodos(commentsContent: string): Todo[] {
         }
 
         const matches = todoRegex2.exec(todoText[0]);
-        
+
         if (matches) {
             return {
                 original_text: todoText[0],
@@ -119,9 +128,8 @@ function extractUntrackedTodos(commentsContent: string): Todo[] {
         } else {
             console.log(`ERROR: Could not parse TODO: ${commentText}`);
             console.log(`todotext: ${todoText}`);
-            console.log(`todotext calculated: ${todoTextRegex.exec(commentText)}`);
             console.log(`matches: ${matches}`);
-            
+
             return {
                 original_text: todoText[0],
                 desc: '',
@@ -132,17 +140,17 @@ function extractUntrackedTodos(commentsContent: string): Todo[] {
         }
     })
     console.log(parsedTodos);
-    
+
     return parsedTodos?.filter(todo => !todo.track_status) ?? [];
 }
 
-async function createTodosOnNotion(todos: Todo[], file_name: string, file_path: string) { 
-    
+export async function createTodosOnNotion(todos: Todo[], file_name: string, file_path: string) {
+
     const notion = new Client({ auth: process.env.NOTION_SECRET })
-
     const databaseId = process.env.NOTION_DB_ID;
+    const responses = [];
 
-    for (const todo of todos) { 
+    for (const todo of todos) {
         try {
             const response = await notion.pages.create({
                 parent: { database_id: databaseId },
@@ -183,13 +191,15 @@ async function createTodosOnNotion(todos: Todo[], file_name: string, file_path: 
             })
 
             console.log("Notion item added: ", response)
-
             todo.track_status = true;
+            responses.push(response);
+
         } catch (error: unknown) {
             console.log(error);
             todo.error_msg = error instanceof Error ? error.message : 'Unknown error';
+            responses.push(error);
         }
     }
 
-    return todos;
+    return responses;
 }

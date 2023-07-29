@@ -1,3 +1,8 @@
-import {handler} from './handler';
+import { handler } from './handler';
 
-handler();
+const scan_paths = [
+    '/Users/fuschini/OneDrive - KIS Solutions/PS/Notes',
+    '/Users/fuschini/OneDrive - KIS Solutions/Coaching',
+]
+
+handler(scan_paths);

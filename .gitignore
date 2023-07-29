@@ -4,3 +4,4 @@ dist/
 .tmp
 output.xml
 .logs/
+.DS_Store
